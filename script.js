@@ -21,6 +21,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const openEditorBtn = document.getElementById('openEditorBtn');
     const loadingContainer = document.getElementById('loadingContainer');
     const shareDesignBtn = document.getElementById('shareDesignBtn');
+    const textPositionX = document.getElementById('textPositionX');
+    const textPositionXValue = document.getElementById('textPositionXValue');
+    const textPositionY = document.getElementById('textPositionY');
+    const textPositionYValue = document.getElementById('textPositionYValue');
 
     // Canvas context
     const ctx = previewCanvas.getContext('2d');
@@ -106,6 +110,14 @@ document.addEventListener('DOMContentLoaded', function() {
         textDensityValue.textContent = textDensity.value;
         updatePreview();
     });
+    textPositionX.addEventListener('input', () => {
+        textPositionXValue.textContent = `${textPositionX.value}%`;
+        updatePreview();
+    });
+    textPositionY.addEventListener('input', () => {
+        textPositionYValue.textContent = `${textPositionY.value}%`;
+        updatePreview();
+    });
 
     // Reset button
     resetBtn.addEventListener('click', () => {
@@ -118,6 +130,10 @@ document.addEventListener('DOMContentLoaded', function() {
         textDepthValue.textContent = '5';
         textDensity.value = 5;
         textDensityValue.textContent = '5';
+        textPositionX.value = 50;
+        textPositionXValue.textContent = '50%';
+        textPositionY.value = 50;
+        textPositionYValue.textContent = '50%';
         updatePreview();
     });
 
@@ -180,17 +196,60 @@ document.addEventListener('DOMContentLoaded', function() {
                         const segmentationConfig = {
                             flipHorizontal: false,
                             internalResolution: 'high',
-                            segmentationThreshold: 0.7,
+                            segmentationThreshold: 0.6, // Lower threshold to catch more of the subject
                             scoreThreshold: 0.2,
                             nmsRadius: 20,
                             minKeypointScore: 0.3,
                             refineSteps: 10
                         };
 
-                        segmentationMask = await bodyPixModel.segmentPerson(previewCanvas, segmentationConfig);
+                        // First segmentation attempt
+                        let segmentation = await bodyPixModel.segmentPerson(previewCanvas, segmentationConfig);
 
-                        // Apply post-processing to improve mask quality
-                        improveSegmentationMask(segmentationMask, width, height);
+                        // Create a temporary canvas to visualize and refine the mask
+                        const tempCanvas = document.createElement('canvas');
+                        tempCanvas.width = width;
+                        tempCanvas.height = height;
+                        const tempCtx = tempCanvas.getContext('2d');
+
+                        // Try multiple segmentation approaches and combine results
+                        const multiPersonConfig = {
+                            ...segmentationConfig,
+                            maxDetections: 5, // Detect up to 5 people
+                            scoreThreshold: 0.3
+                        };
+
+                        // Also try multi-person segmentation
+                        const multiPersonSegmentation = await bodyPixModel.segmentMultiPerson(previewCanvas, multiPersonConfig);
+
+                        // Combine masks from all detected people
+                        const combinedMask = new Uint8Array(width * height);
+
+                        // Start with the single-person mask
+                        for (let i = 0; i < segmentation.data.length; i++) {
+                            combinedMask[i] = segmentation.data[i];
+                        }
+
+                        // Add any additional people detected
+                        if (multiPersonSegmentation.length > 0) {
+                            for (const personMask of multiPersonSegmentation) {
+                                for (let i = 0; i < personMask.data.length; i++) {
+                                    if (personMask.data[i]) {
+                                        combinedMask[i] = 1;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Create a new segmentation object with the combined mask
+                        segmentationMask = {
+                            data: combinedMask,
+                            width: width,
+                            height: height
+                        };
+
+                        // Apply advanced post-processing to improve mask quality
+                        advancedMaskRefinement(segmentationMask, width, height, ctx, originalImage);
 
                         updatePreview();
                         showEditor();
@@ -212,58 +271,260 @@ document.addEventListener('DOMContentLoaded', function() {
         reader.readAsDataURL(file);
     }
 
-    // Function to improve segmentation mask quality
-    function improveSegmentationMask(mask, width, height) {
-        // Apply morphological operations to clean up the mask
+    // Advanced mask refinement function
+    function advancedMaskRefinement(mask, width, height, ctx, originalImage) {
         const maskData = mask.data;
-        const tempMask = new Uint8Array(maskData.length);
+
+        // Step 1: Apply morphological operations (dilation and erosion)
+        const dilatedMask = new Uint8Array(maskData.length);
+        const erodedMask = new Uint8Array(maskData.length);
 
         // Copy original mask
         for (let i = 0; i < maskData.length; i++) {
-            tempMask[i] = maskData[i];
+            dilatedMask[i] = maskData[i];
         }
 
-        // Dilate the mask to fill small holes
-        for (let y = 1; y < height - 1; y++) {
-            for (let x = 1; x < width - 1; x++) {
+        // Dilate the mask (expand)
+        const dilationRadius = 3;
+        for (let y = dilationRadius; y < height - dilationRadius; y++) {
+            for (let x = dilationRadius; x < width - dilationRadius; x++) {
                 const idx = y * width + x;
 
-                // If any of the 8 neighbors is part of the subject, mark this pixel
-                if (!tempMask[idx]) {
-                    if (tempMask[idx - 1] || tempMask[idx + 1] ||
-                        tempMask[idx - width] || tempMask[idx + width] ||
-                        tempMask[idx - width - 1] || tempMask[idx - width + 1] ||
-                        tempMask[idx + width - 1] || tempMask[idx + width + 1]) {
+                if (!dilatedMask[idx]) {
+                    // Check surrounding pixels in a larger radius
+                    let shouldDilate = false;
+
+                    for (let dy = -dilationRadius; dy <= dilationRadius && !shouldDilate; dy++) {
+                        for (let dx = -dilationRadius; dx <= dilationRadius && !shouldDilate; dx++) {
+                            const nx = x + dx;
+                            const ny = y + dy;
+
+                            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                                const neighborIdx = ny * width + nx;
+                                if (dilatedMask[neighborIdx]) {
+                                    shouldDilate = true;
+                                }
+                            }
+                        }
+                    }
+
+                    if (shouldDilate) {
                         maskData[idx] = 1;
                     }
                 }
             }
         }
 
-        // Erode to remove small isolated regions
+        // Copy dilated mask
         for (let i = 0; i < maskData.length; i++) {
-            tempMask[i] = maskData[i];
+            erodedMask[i] = maskData[i];
         }
 
+        // Erode the mask (contract) to remove small isolated regions
+        const erosionRadius = 1;
+        for (let y = erosionRadius; y < height - erosionRadius; y++) {
+            for (let x = erosionRadius; x < width - erosionRadius; x++) {
+                const idx = y * width + x;
+
+                if (erodedMask[idx]) {
+                    // Count neighbors that are part of the subject
+                    let count = 0;
+                    let total = 0;
+
+                    for (let dy = -erosionRadius; dy <= erosionRadius; dy++) {
+                        for (let dx = -erosionRadius; dx <= erosionRadius; dx++) {
+                            if (dx === 0 && dy === 0) continue;
+
+                            const nx = x + dx;
+                            const ny = y + dy;
+
+                            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                                total++;
+                                const neighborIdx = ny * width + nx;
+                                if (erodedMask[neighborIdx]) {
+                                    count++;
+                                }
+                            }
+                        }
+                    }
+
+                    // If fewer than 50% of neighbors are part of the subject, remove this pixel
+                    if (count < total * 0.5) {
+                        maskData[idx] = 0;
+                    }
+                }
+            }
+        }
+
+        // Step 2: Fill holes in the mask
+        fillHoles(maskData, width, height);
+
+        // Step 3: Edge-aware refinement
+        refineEdges(maskData, width, height, ctx, originalImage);
+    }
+
+    // Function to fill holes in the mask
+    function fillHoles(maskData, width, height) {
+        // Create a temporary mask for the flood fill
+        const tempMask = new Uint8Array(maskData.length);
+
+        // Initialize with 1s (filled) except for the edges
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const idx = y * width + x;
+
+                // Mark edges as 0
+                if (x === 0 || y === 0 || x === width - 1 || y === height - 1) {
+                    tempMask[idx] = 0;
+                } else {
+                    tempMask[idx] = 1;
+                }
+            }
+        }
+
+        // Flood fill from the edges
+        const queue = [];
+
+        // Start from the edges
+        for (let y = 0; y < height; y++) {
+            queue.push(y * width); // Left edge
+            queue.push(y * width + (width - 1)); // Right edge
+        }
+
+        for (let x = 0; x < width; x++) {
+            queue.push(x); // Top edge
+            queue.push((height - 1) * width + x); // Bottom edge
+        }
+
+        // Perform flood fill
+        while (queue.length > 0) {
+            const idx = queue.shift();
+
+            if (tempMask[idx] === 0) continue;
+
+            tempMask[idx] = 0;
+
+            const x = idx % width;
+            const y = Math.floor(idx / width);
+
+            // If this is background in the original mask, add neighbors to queue
+            if (!maskData[idx]) {
+                // Check 4-connected neighbors
+                if (x > 0) queue.push(idx - 1);
+                if (x < width - 1) queue.push(idx + 1);
+                if (y > 0) queue.push(idx - width);
+                if (y < height - 1) queue.push(idx + width);
+            }
+        }
+
+        // Now tempMask contains 1s for holes and 0s for everything else
+        // Fill holes in the original mask
+        for (let i = 0; i < maskData.length; i++) {
+            if (tempMask[i]) {
+                maskData[i] = 1;
+            }
+        }
+    }
+
+    // Function to refine edges based on image content
+    function refineEdges(maskData, width, height, ctx, originalImage) {
+        // Get the original image data
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = width;
+        tempCanvas.height = height;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(originalImage, 0, 0, width, height);
+        const imageData = tempCtx.getImageData(0, 0, width, height).data;
+
+        // Create a gradient magnitude map
+        const gradientMap = new Float32Array(maskData.length);
+
+        // Calculate gradient magnitude using Sobel operator
         for (let y = 1; y < height - 1; y++) {
             for (let x = 1; x < width - 1; x++) {
                 const idx = y * width + x;
 
-                if (tempMask[idx]) {
-                    // Count neighbors that are part of the subject
-                    let count = 0;
-                    if (tempMask[idx - 1]) count++;
-                    if (tempMask[idx + 1]) count++;
-                    if (tempMask[idx - width]) count++;
-                    if (tempMask[idx + width]) count++;
-                    if (tempMask[idx - width - 1]) count++;
-                    if (tempMask[idx - width + 1]) count++;
-                    if (tempMask[idx + width - 1]) count++;
-                    if (tempMask[idx + width + 1]) count++;
+                // Calculate gradient in x and y directions
+                let gx = 0,
+                    gy = 0;
 
-                    // If fewer than 4 neighbors are part of the subject, remove this pixel
-                    if (count < 4) {
-                        maskData[idx] = 0;
+                for (let c = 0; c < 3; c++) { // For each color channel
+                    const i00 = ((y - 1) * width + (x - 1)) * 4 + c;
+                    const i01 = ((y - 1) * width + x) * 4 + c;
+                    const i02 = ((y - 1) * width + (x + 1)) * 4 + c;
+                    const i10 = (y * width + (x - 1)) * 4 + c;
+                    const i12 = (y * width + (x + 1)) * 4 + c;
+                    const i20 = ((y + 1) * width + (x - 1)) * 4 + c;
+                    const i21 = ((y + 1) * width + x) * 4 + c;
+                    const i22 = ((y + 1) * width + (x + 1)) * 4 + c;
+
+                    // Sobel operators
+                    gx += (imageData[i02] - imageData[i00]) + 2 * (imageData[i12] - imageData[i10]) + (imageData[i22] - imageData[i20]);
+                    gy += (imageData[i20] - imageData[i00]) + 2 * (imageData[i21] - imageData[i01]) + (imageData[i22] - imageData[i02]);
+                }
+
+                // Calculate gradient magnitude
+                gradientMap[idx] = Math.sqrt(gx * gx + gy * gy) / 3; // Divide by 3 for the channels
+            }
+        }
+
+        // Refine mask edges based on gradient
+        const edgeWidth = 3;
+
+        for (let y = edgeWidth; y < height - edgeWidth; y++) {
+            for (let x = edgeWidth; x < width - edgeWidth; x++) {
+                const idx = y * width + x;
+
+                // Check if this is near an edge in the mask
+                let isNearEdge = false;
+
+                for (let dy = -edgeWidth; dy <= edgeWidth && !isNearEdge; dy++) {
+                    for (let dx = -edgeWidth; dx <= edgeWidth && !isNearEdge; dx++) {
+                        if (dx === 0 && dy === 0) continue;
+
+                        const nx = x + dx;
+                        const ny = y + dy;
+
+                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                            const neighborIdx = ny * width + nx;
+
+                            // If neighbor has different mask value, this is near an edge
+                            if (maskData[idx] !== maskData[neighborIdx]) {
+                                isNearEdge = true;
+                            }
+                        }
+                    }
+                }
+
+                // If near an edge, refine based on gradient
+                if (isNearEdge) {
+                    // If high gradient, align mask edge with image edge
+                    if (gradientMap[idx] > 50) { // Threshold for significant edge
+                        // Check if this should be foreground or background
+                        let foregroundCount = 0;
+                        let backgroundCount = 0;
+
+                        for (let dy = -2; dy <= 2; dy++) {
+                            for (let dx = -2; dx <= 2; dx++) {
+                                if (dx === 0 && dy === 0) continue;
+
+                                const nx = x + dx;
+                                const ny = y + dy;
+
+                                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                                    const neighborIdx = ny * width + nx;
+
+                                    if (maskData[neighborIdx]) {
+                                        foregroundCount++;
+                                    } else {
+                                        backgroundCount++;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Assign to the dominant class
+                        maskData[idx] = (foregroundCount > backgroundCount) ? 1 : 0;
                     }
                 }
             }
@@ -289,7 +550,22 @@ document.addEventListener('DOMContentLoaded', function() {
         const fontFamilyVal = fontFamily.value;
         const depthEffect = parseInt(textDepth.value);
 
-        // Create a text canvas
+        // Get text position values (convert from percentage to actual coordinates)
+        const textX = width * (parseInt(textPositionX.value) / 100);
+        const textY = height * (parseInt(textPositionY.value) / 100);
+
+        // ===== LAYER 1: Original Image (Bottom Layer) =====
+        // Create a canvas for the original image
+        const originalCanvas = document.createElement('canvas');
+        originalCanvas.width = width;
+        originalCanvas.height = height;
+        const originalCtx = originalCanvas.getContext('2d');
+
+        // Draw the original image
+        originalCtx.drawImage(originalImage, 0, 0, width, height);
+
+        // ===== LAYER 2: Text Layer (Middle Layer) =====
+        // Create a canvas for the text
         const textCanvas = document.createElement('canvas');
         textCanvas.width = width;
         textCanvas.height = height;
@@ -301,70 +577,87 @@ document.addEventListener('DOMContentLoaded', function() {
         textCtx.textAlign = 'center';
         textCtx.textBaseline = 'middle';
 
-        // Draw a single large text in the center
+        // Draw text at the specified position
         const singleLineText = text.replace(/\n/g, ' ');
-        textCtx.fillText(singleLineText, width / 2, height / 2);
+        textCtx.fillText(singleLineText, textX, textY);
+
+        // ===== LAYER 3: Subject Layer (Top Layer) =====
+        // Create a canvas for the subject
+        const subjectCanvas = document.createElement('canvas');
+        subjectCanvas.width = width;
+        subjectCanvas.height = height;
+        const subjectCtx = subjectCanvas.getContext('2d');
 
         // Get the mask data
         const maskData = segmentationMask.data;
 
-        // Create the final image data
-        const finalImageData = ctx.createImageData(width, height);
+        // Get image data from original image
+        const originalImageData = originalCtx.getImageData(0, 0, width, height);
 
-        // Draw the original image to a temporary canvas to get its pixel data
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = width;
-        tempCanvas.height = height;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.drawImage(originalImage, 0, 0, width, height);
-        const originalImageData = tempCtx.getImageData(0, 0, width, height).data;
+        // Create image data for the subject with transparent background
+        const subjectImageData = subjectCtx.createImageData(width, height);
 
-        // Get text pixel data
-        const textImageData = textCtx.getImageData(0, 0, width, height).data;
-
-        // Parse the font color to RGB
-        const colorR = parseInt(fontColorVal.slice(1, 3), 16);
-        const colorG = parseInt(fontColorVal.slice(3, 5), 16);
-        const colorB = parseInt(fontColorVal.slice(5, 7), 16);
-
-        // Process each pixel with improved edge handling
+        // Extract subject from original image using the mask
         for (let i = 0; i < maskData.length; i++) {
             const pixelIndex = i * 4;
 
-            // Start with white background
-            finalImageData.data[pixelIndex] = 255; // R
-            finalImageData.data[pixelIndex + 1] = 255; // G
-            finalImageData.data[pixelIndex + 2] = 255; // B
-            finalImageData.data[pixelIndex + 3] = 255; // A
-
             if (maskData[i]) {
-                // This is the subject - keep original image
-                finalImageData.data[pixelIndex] = originalImageData[pixelIndex];
-                finalImageData.data[pixelIndex + 1] = originalImageData[pixelIndex + 1];
-                finalImageData.data[pixelIndex + 2] = originalImageData[pixelIndex + 2];
-            } else if (textImageData[pixelIndex + 3] > 0) {
-                // This is background with text - use the font color
-                finalImageData.data[pixelIndex] = colorR;
-                finalImageData.data[pixelIndex + 1] = colorG;
-                finalImageData.data[pixelIndex + 2] = colorB;
+                // This is the subject - copy from original image
+                subjectImageData.data[pixelIndex] = originalImageData.data[pixelIndex];
+                subjectImageData.data[pixelIndex + 1] = originalImageData.data[pixelIndex + 1];
+                subjectImageData.data[pixelIndex + 2] = originalImageData.data[pixelIndex + 2];
+                subjectImageData.data[pixelIndex + 3] = 255; // Fully opaque
+            } else {
+                // This is background - make transparent
+                subjectImageData.data[pixelIndex] = 0;
+                subjectImageData.data[pixelIndex + 1] = 0;
+                subjectImageData.data[pixelIndex + 2] = 0;
+                subjectImageData.data[pixelIndex + 3] = 0; // Fully transparent
             }
         }
 
-        // Apply enhanced depth effect
-        if (depthEffect > 0) {
-            applyEnhancedDepthEffect(finalImageData, maskData, textImageData, width, height, depthEffect);
+        // Put the subject image data on the subject canvas
+        subjectCtx.putImageData(subjectImageData, 0, 0);
+
+        // ===== COMBINE LAYERS =====
+        // 1. Start with a white background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
+
+        // 2. Draw the original image where text exists
+        const textImageData = textCtx.getImageData(0, 0, width, height);
+        const finalImageData = ctx.getImageData(0, 0, width, height);
+
+        for (let i = 0; i < maskData.length; i++) {
+            const pixelIndex = i * 4;
+
+            if (!maskData[i] && textImageData.data[pixelIndex + 3] > 0) {
+                // This is background with text - show original image
+                finalImageData.data[pixelIndex] = originalImageData.data[pixelIndex];
+                finalImageData.data[pixelIndex + 1] = originalImageData.data[pixelIndex + 1];
+                finalImageData.data[pixelIndex + 2] = originalImageData.data[pixelIndex + 2];
+                finalImageData.data[pixelIndex + 3] = 255;
+            }
         }
 
-        // Put the final image data to the canvas
         ctx.putImageData(finalImageData, 0, 0);
+
+        // 3. Draw the subject on top
+        ctx.drawImage(subjectCanvas, 0, 0);
+
+        // Apply depth effect if needed
+        if (depthEffect > 0) {
+            applyLayeredDepthEffect(ctx, maskData, textImageData.data, width, height, depthEffect);
+        }
 
         // Store current design for sharing
         currentDesignDataUrl = previewCanvas.toDataURL('image/png');
     }
 
-    // Enhanced depth effect function
-    function applyEnhancedDepthEffect(imageData, maskData, textImageData, width, height, strength) {
-        const edgeSize = strength;
+    // Updated depth effect function for layered approach
+    function applyLayeredDepthEffect(ctx, maskData, textData, width, height, strength) {
+        // Get current canvas data
+        const imageData = ctx.getImageData(0, 0, width, height);
         const data = imageData.data;
 
         // Create a copy of the image data
@@ -397,8 +690,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const pixelIndex = i * 4;
 
             // Check surrounding pixels for text
-            for (let dy = -edgeSize; dy <= edgeSize; dy++) {
-                for (let dx = -edgeSize; dx <= edgeSize; dx++) {
+            for (let dy = -strength; dy <= strength; dy++) {
+                for (let dx = -strength; dx <= strength; dx++) {
                     if (dx === 0 && dy === 0) continue;
 
                     const nx = x + dx;
@@ -407,14 +700,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
 
                     const neighborIndex = ny * width + nx;
+                    const neighborPixelIndex = neighborIndex * 4;
 
                     // If neighbor is background with text
-                    if (!maskData[neighborIndex] && textImageData[neighborIndex * 4 + 3] > 0) {
+                    if (!maskData[neighborIndex] && textData[neighborPixelIndex + 3] > 0) {
                         // Calculate intensity based on distance
                         const distance = Math.sqrt(dx * dx + dy * dy);
-                        if (distance > edgeSize) continue;
+                        if (distance > strength) continue;
 
-                        const intensity = Math.pow(1 - (distance / edgeSize), 2); // Squared for smoother falloff
+                        const intensity = Math.pow(1 - (distance / strength), 2); // Squared for smoother falloff
 
                         // Apply highlight to edge with improved blending
                         const brightnessFactor = 40 * intensity;
@@ -425,6 +719,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         }
+
+        // Put the modified image data back
+        ctx.putImageData(imageData, 0, 0);
     }
 
     // Download the edited image
