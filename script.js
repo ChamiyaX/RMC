@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // DOM Elements
     const uploadArea = document.getElementById('uploadArea');
     const imageUpload = document.getElementById('imageUpload');
+    const uploadContainer = document.getElementById('uploadContainer');
     const editorContainer = document.getElementById('editorContainer');
     const previewCanvas = document.getElementById('previewCanvas');
     const textInput = document.getElementById('textInput');
@@ -11,11 +12,15 @@ document.addEventListener('DOMContentLoaded', function() {
     const fontFamily = document.getElementById('fontFamily');
     const textDepth = document.getElementById('textDepth');
     const textDepthValue = document.getElementById('textDepthValue');
-    const resetBtn = document.getElementById('resetBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
-    const loadingContainer = document.getElementById('loadingContainer');
     const textDensity = document.getElementById('textDensity');
     const textDensityValue = document.getElementById('textDensityValue');
+    const resetBtn = document.getElementById('resetBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const shareBtn = document.getElementById('shareBtn');
+    const backBtn = document.getElementById('backBtn');
+    const openEditorBtn = document.getElementById('openEditorBtn');
+    const loadingContainer = document.getElementById('loadingContainer');
+    const shareDesignBtn = document.getElementById('shareDesignBtn');
 
     // Canvas context
     const ctx = previewCanvas.getContext('2d');
@@ -24,6 +29,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let originalImage = null;
     let segmentationMask = null;
     let bodyPixModel = null;
+    let currentDesignDataUrl = null;
 
     // Initialize BodyPix model
     async function loadBodyPixModel() {
@@ -71,6 +77,19 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    openEditorBtn.addEventListener('click', () => {
+        if (!originalImage) {
+            imageUpload.click();
+        } else {
+            showEditor();
+        }
+    });
+
+    backBtn.addEventListener('click', () => {
+        uploadContainer.style.display = 'block';
+        editorContainer.style.display = 'none';
+    });
+
     // Update preview when text options change
     textInput.addEventListener('input', updatePreview);
     fontSize.addEventListener('input', () => {
@@ -104,6 +123,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Download button
     downloadBtn.addEventListener('click', downloadImage);
+
+    // Share buttons
+    shareBtn.addEventListener('click', shareImage);
+    shareDesignBtn.addEventListener('click', shareImage);
+
+    function showEditor() {
+        uploadContainer.style.display = 'none';
+        editorContainer.style.display = 'block';
+    }
 
     // Handle image upload
     async function handleImageUpload(file) {
@@ -150,7 +178,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     try {
                         segmentationMask = await bodyPixModel.segmentPerson(previewCanvas);
                         updatePreview();
-                        editorContainer.style.display = 'flex';
+                        showEditor();
                         loadingContainer.style.display = 'none';
                     } catch (error) {
                         console.error('Error during segmentation:', error);
@@ -193,9 +221,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const depthEffect = parseInt(textDepth.value);
         const density = parseInt(textDensity.value);
 
-        // Adjust the textSpacing based on density
-        const textSpacing = fontSizeVal * (1.5 / (density / 5));
-
         // Create temporary canvas for background pattern
         const patternCanvas = document.createElement('canvas');
         patternCanvas.width = width;
@@ -225,19 +250,19 @@ document.addEventListener('DOMContentLoaded', function() {
         const textWidth = textMetrics.width;
 
         // Calculate rows and columns for text pattern
-        const horizontalSpacing = textWidth + fontSizeVal;
-        const verticalSpacing = fontSizeVal * 1.5 * (10 / density);
+        const horizontalSpacing = textWidth + fontSizeVal * 0.5;
+        const verticalSpacing = fontSizeVal * (1.2 * (10 / density));
 
-        const cols = Math.ceil(width / horizontalSpacing) + 1;
-        const rows = Math.ceil(height / verticalSpacing) + 1;
+        const cols = Math.ceil(width / horizontalSpacing) + 2;
+        const rows = Math.ceil(height / verticalSpacing) + 2;
 
         // Fill the canvas with a grid of text
         for (let row = 0; row < rows; row++) {
             for (let col = 0; col < cols; col++) {
                 // Offset every other row for a more natural pattern
                 const xOffset = (row % 2) * (horizontalSpacing / 2);
-                const x = col * horizontalSpacing + xOffset;
-                const y = row * verticalSpacing;
+                const x = col * horizontalSpacing + xOffset - horizontalSpacing / 2;
+                const y = row * verticalSpacing - verticalSpacing / 2;
 
                 textPatternCtx.fillText(singleLineText, x, y);
             }
@@ -317,13 +342,68 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Put the modified image data back
         ctx.putImageData(resultImageData, 0, 0);
+
+        // Store current design for sharing
+        currentDesignDataUrl = previewCanvas.toDataURL('image/png');
     }
 
     // Download the edited image
     function downloadImage() {
+        if (!currentDesignDataUrl) {
+            updatePreview(); // Make sure we have the latest version
+        }
+
         const link = document.createElement('a');
-        link.download = 'textbimg_edited.png';
-        link.href = previewCanvas.toDataURL('image/png');
+        link.download = 'textbimg_design.png';
+        link.href = currentDesignDataUrl;
         link.click();
     }
+
+    // Share the edited image
+    function shareImage() {
+        if (!currentDesignDataUrl) {
+            updatePreview(); // Make sure we have the latest version
+        }
+
+        if (navigator.share) {
+            // Web Share API is supported
+            fetch(currentDesignDataUrl)
+                .then(res => res.blob())
+                .then(blob => {
+                    const file = new File([blob], 'textbimg_design.png', { type: 'image/png' });
+                    navigator.share({
+                        title: 'My TextBIMG Design',
+                        text: 'Check out this text-behind-image design I created with TextBIMG!',
+                        files: [file]
+                    }).catch(error => {
+                        console.error('Error sharing:', error);
+                        fallbackShare();
+                    });
+                });
+        } else {
+            fallbackShare();
+        }
+    }
+
+    // Fallback sharing method
+    function fallbackShare() {
+        // Create a temporary input
+        const input = document.createElement('input');
+        input.value = 'Check out TextBIMG for creating text-behind-image designs: https://textbimg.netlify.app';
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand('copy');
+        document.body.removeChild(input);
+
+        alert('Link copied to clipboard! You can paste it to share with others.');
+    }
+
+    // Initialize gallery items
+    const galleryItems = document.querySelectorAll('.gallery-item');
+    galleryItems.forEach(item => {
+        item.addEventListener('click', () => {
+            // In a real app, you might load the selected gallery image
+            alert('Gallery feature coming soon! You\'ll be able to use these example images as templates.');
+        });
+    });
 });
