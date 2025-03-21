@@ -207,61 +207,9 @@ document.addEventListener('DOMContentLoaded', function() {
         // Clear canvas
         ctx.clearRect(0, 0, width, height);
 
-        // Get the text (default to "fff" if empty)
-        const text = textInput.value || "fff";
-
-        // Text settings
-        const fontSizeVal = parseInt(fontSize.value);
-        const fontColorVal = fontColor.value;
-        const fontFamilyVal = fontFamily.value;
-        const depthEffect = parseInt(textDepth.value);
-        const density = parseInt(textDensity.value);
-
-        // Create a background canvas with white background
-        const bgCanvas = document.createElement('canvas');
-        bgCanvas.width = width;
-        bgCanvas.height = height;
-        const bgCtx = bgCanvas.getContext('2d');
-        bgCtx.fillStyle = '#ffffff';
-        bgCtx.fillRect(0, 0, width, height);
-
-        // Create a text pattern canvas
-        const textCanvas = document.createElement('canvas');
-        textCanvas.width = width;
-        textCanvas.height = height;
-        const textCtx = textCanvas.getContext('2d');
-
-        // Set text properties
-        textCtx.font = `${fontSizeVal}px ${fontFamilyVal}`;
-        textCtx.fillStyle = fontColorVal;
-        textCtx.textAlign = 'center';
-        textCtx.textBaseline = 'middle';
-
-        // Calculate text spacing based on density
-        const singleLineText = text.replace(/\n/g, ' ');
-        const textMetrics = textCtx.measureText(singleLineText);
-        const textWidth = textMetrics.width;
-
-        // Adjust spacing based on density (1-10)
-        const spacingFactor = 11 - density; // Invert so 1=dense, 10=sparse
-        const horizontalSpacing = textWidth * (0.8 + (spacingFactor * 0.1));
-        const verticalSpacing = fontSizeVal * (0.8 + (spacingFactor * 0.1));
-
-        // Calculate grid dimensions
-        const cols = Math.ceil(width / horizontalSpacing) + 2;
-        const rows = Math.ceil(height / verticalSpacing) + 2;
-
-        // Draw text grid
-        for (let row = -1; row < rows; row++) {
-            for (let col = -1; col < cols; col++) {
-                // Offset every other row
-                const xOffset = (row % 2) * (horizontalSpacing / 2);
-                const x = col * horizontalSpacing + xOffset;
-                const y = row * verticalSpacing;
-
-                textCtx.fillText(singleLineText, x, y);
-            }
-        }
+        // Create a white background
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
 
         // Get the mask data
         const maskData = segmentationMask.data;
@@ -276,9 +224,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const tempCtx = tempCanvas.getContext('2d');
         tempCtx.drawImage(originalImage, 0, 0, width, height);
         const originalImageData = tempCtx.getImageData(0, 0, width, height).data;
-
-        // Get text pixel data
-        const textImageData = textCtx.getImageData(0, 0, width, height).data;
 
         // Process each pixel
         for (let i = 0; i < maskData.length; i++) {
@@ -295,20 +240,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 finalImageData.data[pixelIndex] = originalImageData[pixelIndex];
                 finalImageData.data[pixelIndex + 1] = originalImageData[pixelIndex + 1];
                 finalImageData.data[pixelIndex + 2] = originalImageData[pixelIndex + 2];
-            } else {
-                // This is background - check if there's text here
-                if (textImageData[pixelIndex + 3] > 0) {
-                    // Where text exists, show original image
-                    finalImageData.data[pixelIndex] = originalImageData[pixelIndex];
-                    finalImageData.data[pixelIndex + 1] = originalImageData[pixelIndex + 1];
-                    finalImageData.data[pixelIndex + 2] = originalImageData[pixelIndex + 2];
-                }
             }
         }
 
-        // Apply depth effect if needed
+        // Apply a simple edge enhancement if depth effect is enabled
+        const depthEffect = parseInt(textDepth.value);
         if (depthEffect > 0) {
-            applyDepthEffect(finalImageData, maskData, textImageData, width, height, depthEffect);
+            enhanceEdges(finalImageData, maskData, width, height, depthEffect);
         }
 
         // Put the final image data to the canvas
@@ -318,8 +256,8 @@ document.addEventListener('DOMContentLoaded', function() {
         currentDesignDataUrl = previewCanvas.toDataURL('image/png');
     }
 
-    // Helper function to apply depth effect
-    function applyDepthEffect(imageData, maskData, textImageData, width, height, strength) {
+    // Simplified edge enhancement function
+    function enhanceEdges(imageData, maskData, width, height, strength) {
         const edgeSize = strength;
 
         // Create a copy of the image data to avoid modifying while iterating
@@ -332,9 +270,11 @@ document.addEventListener('DOMContentLoaded', function() {
             const y = Math.floor(i / width);
             const pixelIndex = i * 4;
 
-            // Check surrounding pixels for text in background
-            for (let dx = -edgeSize; dx <= edgeSize; dx++) {
-                for (let dy = -edgeSize; dy <= edgeSize; dy++) {
+            // Check if this is an edge pixel
+            let isEdge = false;
+
+            for (let dx = -1; dx <= 1 && !isEdge; dx++) {
+                for (let dy = -1; dy <= 1 && !isEdge; dy++) {
                     if (dx === 0 && dy === 0) continue;
 
                     const nx = x + dx;
@@ -344,21 +284,19 @@ document.addEventListener('DOMContentLoaded', function() {
 
                     const neighborIndex = ny * width + nx;
 
-                    // If neighbor is background with text
-                    if (!maskData[neighborIndex] && textImageData[neighborIndex * 4 + 3] > 0) {
-                        // Calculate intensity based on distance
-                        const distance = Math.sqrt(dx * dx + dy * dy);
-                        if (distance > edgeSize) continue;
-
-                        const intensity = 1 - (distance / edgeSize);
-
-                        // Apply highlight to edge
-                        const brightnessFactor = 30 * intensity;
-                        imageData.data[pixelIndex] = Math.min(255, tempData[pixelIndex] + brightnessFactor);
-                        imageData.data[pixelIndex + 1] = Math.min(255, tempData[pixelIndex + 1] + brightnessFactor);
-                        imageData.data[pixelIndex + 2] = Math.min(255, tempData[pixelIndex + 2] + brightnessFactor);
+                    // If neighbor is background
+                    if (!maskData[neighborIndex]) {
+                        isEdge = true;
                     }
                 }
+            }
+
+            if (isEdge) {
+                // Apply highlight to edge
+                const brightnessFactor = 20 * strength / 5;
+                imageData.data[pixelIndex] = Math.min(255, tempData[pixelIndex] + brightnessFactor);
+                imageData.data[pixelIndex + 1] = Math.min(255, tempData[pixelIndex + 1] + brightnessFactor);
+                imageData.data[pixelIndex + 2] = Math.min(255, tempData[pixelIndex + 2] + brightnessFactor);
             }
         }
     }
