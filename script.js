@@ -173,10 +173,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Draw original image
                 ctx.drawImage(img, 0, 0, width, height);
 
-                // Process image with BodyPix
+                // Process image with BodyPix with improved settings
                 if (bodyPixModel) {
                     try {
-                        segmentationMask = await bodyPixModel.segmentPerson(previewCanvas);
+                        // Use more detailed segmentation options
+                        const segmentationConfig = {
+                            flipHorizontal: false,
+                            internalResolution: 'high',
+                            segmentationThreshold: 0.7,
+                            scoreThreshold: 0.2,
+                            nmsRadius: 20,
+                            minKeypointScore: 0.3,
+                            refineSteps: 10
+                        };
+
+                        segmentationMask = await bodyPixModel.segmentPerson(previewCanvas, segmentationConfig);
+
+                        // Apply post-processing to improve mask quality
+                        improveSegmentationMask(segmentationMask, width, height);
+
                         updatePreview();
                         showEditor();
                         loadingContainer.style.display = 'none';
@@ -197,6 +212,64 @@ document.addEventListener('DOMContentLoaded', function() {
         reader.readAsDataURL(file);
     }
 
+    // Function to improve segmentation mask quality
+    function improveSegmentationMask(mask, width, height) {
+        // Apply morphological operations to clean up the mask
+        const maskData = mask.data;
+        const tempMask = new Uint8Array(maskData.length);
+
+        // Copy original mask
+        for (let i = 0; i < maskData.length; i++) {
+            tempMask[i] = maskData[i];
+        }
+
+        // Dilate the mask to fill small holes
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                const idx = y * width + x;
+
+                // If any of the 8 neighbors is part of the subject, mark this pixel
+                if (!tempMask[idx]) {
+                    if (tempMask[idx - 1] || tempMask[idx + 1] ||
+                        tempMask[idx - width] || tempMask[idx + width] ||
+                        tempMask[idx - width - 1] || tempMask[idx - width + 1] ||
+                        tempMask[idx + width - 1] || tempMask[idx + width + 1]) {
+                        maskData[idx] = 1;
+                    }
+                }
+            }
+        }
+
+        // Erode to remove small isolated regions
+        for (let i = 0; i < maskData.length; i++) {
+            tempMask[i] = maskData[i];
+        }
+
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                const idx = y * width + x;
+
+                if (tempMask[idx]) {
+                    // Count neighbors that are part of the subject
+                    let count = 0;
+                    if (tempMask[idx - 1]) count++;
+                    if (tempMask[idx + 1]) count++;
+                    if (tempMask[idx - width]) count++;
+                    if (tempMask[idx + width]) count++;
+                    if (tempMask[idx - width - 1]) count++;
+                    if (tempMask[idx - width + 1]) count++;
+                    if (tempMask[idx + width - 1]) count++;
+                    if (tempMask[idx + width + 1]) count++;
+
+                    // If fewer than 4 neighbors are part of the subject, remove this pixel
+                    if (count < 4) {
+                        maskData[idx] = 0;
+                    }
+                }
+            }
+        }
+    }
+
     // Update preview with text as background
     function updatePreview() {
         if (!originalImage || !segmentationMask) return;
@@ -215,14 +288,6 @@ document.addEventListener('DOMContentLoaded', function() {
         const fontColorVal = fontColor.value;
         const fontFamilyVal = fontFamily.value;
         const depthEffect = parseInt(textDepth.value);
-
-        // Create a background canvas with white background
-        const bgCanvas = document.createElement('canvas');
-        bgCanvas.width = width;
-        bgCanvas.height = height;
-        const bgCtx = bgCanvas.getContext('2d');
-        bgCtx.fillStyle = '#ffffff';
-        bgCtx.fillRect(0, 0, width, height);
 
         // Create a text canvas
         const textCanvas = document.createElement('canvas');
@@ -257,7 +322,12 @@ document.addEventListener('DOMContentLoaded', function() {
         // Get text pixel data
         const textImageData = textCtx.getImageData(0, 0, width, height).data;
 
-        // Process each pixel
+        // Parse the font color to RGB
+        const colorR = parseInt(fontColorVal.slice(1, 3), 16);
+        const colorG = parseInt(fontColorVal.slice(3, 5), 16);
+        const colorB = parseInt(fontColorVal.slice(5, 7), 16);
+
+        // Process each pixel with improved edge handling
         for (let i = 0; i < maskData.length; i++) {
             const pixelIndex = i * 4;
 
@@ -273,16 +343,16 @@ document.addEventListener('DOMContentLoaded', function() {
                 finalImageData.data[pixelIndex + 1] = originalImageData[pixelIndex + 1];
                 finalImageData.data[pixelIndex + 2] = originalImageData[pixelIndex + 2];
             } else if (textImageData[pixelIndex + 3] > 0) {
-                // This is background with text - show original image
-                finalImageData.data[pixelIndex] = originalImageData[pixelIndex];
-                finalImageData.data[pixelIndex + 1] = originalImageData[pixelIndex + 1];
-                finalImageData.data[pixelIndex + 2] = originalImageData[pixelIndex + 2];
+                // This is background with text - use the font color
+                finalImageData.data[pixelIndex] = colorR;
+                finalImageData.data[pixelIndex + 1] = colorG;
+                finalImageData.data[pixelIndex + 2] = colorB;
             }
         }
 
-        // Apply depth effect if needed
+        // Apply enhanced depth effect
         if (depthEffect > 0) {
-            applyDepthEffect(finalImageData, maskData, textImageData, width, height, depthEffect);
+            applyEnhancedDepthEffect(finalImageData, maskData, textImageData, width, height, depthEffect);
         }
 
         // Put the final image data to the canvas
@@ -292,23 +362,43 @@ document.addEventListener('DOMContentLoaded', function() {
         currentDesignDataUrl = previewCanvas.toDataURL('image/png');
     }
 
-    // Helper function to apply depth effect
-    function applyDepthEffect(imageData, maskData, textImageData, width, height, strength) {
+    // Enhanced depth effect function
+    function applyEnhancedDepthEffect(imageData, maskData, textImageData, width, height, strength) {
         const edgeSize = strength;
+        const data = imageData.data;
 
-        // Create a copy of the image data to avoid modifying while iterating
-        const tempData = new Uint8ClampedArray(imageData.data);
+        // Create a copy of the image data
+        const tempData = new Uint8ClampedArray(data);
 
+        // Create an edge detection map
+        const edgeMap = new Uint8Array(maskData.length);
+
+        // Detect edges in the mask
+        for (let y = 1; y < height - 1; y++) {
+            for (let x = 1; x < width - 1; x++) {
+                const idx = y * width + x;
+
+                if (maskData[idx]) {
+                    // Check if this is an edge pixel (has at least one background neighbor)
+                    if (!maskData[idx - 1] || !maskData[idx + 1] ||
+                        !maskData[idx - width] || !maskData[idx + width]) {
+                        edgeMap[idx] = 1;
+                    }
+                }
+            }
+        }
+
+        // Apply the enhanced depth effect
         for (let i = 0; i < maskData.length; i++) {
-            if (!maskData[i]) continue; // Skip non-subject pixels
+            if (!edgeMap[i]) continue; // Only process edge pixels
 
             const x = i % width;
             const y = Math.floor(i / width);
             const pixelIndex = i * 4;
 
-            // Check surrounding pixels for text in background
-            for (let dx = -edgeSize; dx <= edgeSize; dx++) {
-                for (let dy = -edgeSize; dy <= edgeSize; dy++) {
+            // Check surrounding pixels for text
+            for (let dy = -edgeSize; dy <= edgeSize; dy++) {
+                for (let dx = -edgeSize; dx <= edgeSize; dx++) {
                     if (dx === 0 && dy === 0) continue;
 
                     const nx = x + dx;
@@ -324,13 +414,13 @@ document.addEventListener('DOMContentLoaded', function() {
                         const distance = Math.sqrt(dx * dx + dy * dy);
                         if (distance > edgeSize) continue;
 
-                        const intensity = 1 - (distance / edgeSize);
+                        const intensity = Math.pow(1 - (distance / edgeSize), 2); // Squared for smoother falloff
 
-                        // Apply highlight to edge
-                        const brightnessFactor = 30 * intensity;
-                        imageData.data[pixelIndex] = Math.min(255, tempData[pixelIndex] + brightnessFactor);
-                        imageData.data[pixelIndex + 1] = Math.min(255, tempData[pixelIndex + 1] + brightnessFactor);
-                        imageData.data[pixelIndex + 2] = Math.min(255, tempData[pixelIndex + 2] + brightnessFactor);
+                        // Apply highlight to edge with improved blending
+                        const brightnessFactor = 40 * intensity;
+                        data[pixelIndex] = Math.min(255, tempData[pixelIndex] + brightnessFactor);
+                        data[pixelIndex + 1] = Math.min(255, tempData[pixelIndex + 1] + brightnessFactor);
+                        data[pixelIndex + 2] = Math.min(255, tempData[pixelIndex + 2] + brightnessFactor);
                     }
                 }
             }
