@@ -106,10 +106,6 @@ document.addEventListener('DOMContentLoaded', function() {
         textDepthValue.textContent = textDepth.value;
         updatePreview();
     });
-    textDensity.addEventListener('input', () => {
-        textDensityValue.textContent = textDensity.value;
-        updatePreview();
-    });
     textPositionX.addEventListener('input', () => {
         textPositionXValue.textContent = `${textPositionX.value}%`;
         updatePreview();
@@ -128,8 +124,6 @@ document.addEventListener('DOMContentLoaded', function() {
         fontFamily.value = 'Arial';
         textDepth.value = 5;
         textDepthValue.textContent = '5';
-        textDensity.value = 5;
-        textDensityValue.textContent = '5';
         textPositionX.value = 50;
         textPositionXValue.textContent = '50%';
         textPositionY.value = 50;
@@ -554,15 +548,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const textX = width * (parseInt(textPositionX.value) / 100);
         const textY = height * (parseInt(textPositionY.value) / 100);
 
-        // ===== LAYER 1: Original Image (Bottom Layer) =====
-        // Create a canvas for the original image
-        const originalCanvas = document.createElement('canvas');
-        originalCanvas.width = width;
-        originalCanvas.height = height;
-        const originalCtx = originalCanvas.getContext('2d');
-
-        // Draw the original image
-        originalCtx.drawImage(originalImage, 0, 0, width, height);
+        // ===== LAYER 1: White Background (Bottom Layer) =====
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, width, height);
 
         // ===== LAYER 2: Text Layer (Middle Layer) =====
         // Create a canvas for the text
@@ -571,28 +559,71 @@ document.addEventListener('DOMContentLoaded', function() {
         textCanvas.height = height;
         const textCtx = textCanvas.getContext('2d');
 
-        // Set text properties
-        textCtx.font = `${fontSizeVal}px ${fontFamilyVal}`;
+        // Set text properties with increased size for better visibility
+        textCtx.font = `bold ${fontSizeVal}px ${fontFamilyVal}`;
         textCtx.fillStyle = fontColorVal;
         textCtx.textAlign = 'center';
         textCtx.textBaseline = 'middle';
 
         // Draw text at the specified position
         const singleLineText = text.replace(/\n/g, ' ');
+
+        // Draw text with a slight shadow for better visibility
+        textCtx.shadowColor = 'rgba(0,0,0,0.3)';
+        textCtx.shadowBlur = 3;
         textCtx.fillText(singleLineText, textX, textY);
 
-        // ===== LAYER 3: Subject Layer (Top Layer) =====
+        // Get the text image data
+        const textImageData = textCtx.getImageData(0, 0, width, height);
+
+        // ===== LAYER 3: Original Image Through Text =====
+        // Create a canvas for the original image
+        const originalCanvas = document.createElement('canvas');
+        originalCanvas.width = width;
+        originalCanvas.height = height;
+        const originalCtx = originalCanvas.getContext('2d');
+
+        // Draw the original image
+        originalCtx.drawImage(originalImage, 0, 0, width, height);
+        const originalImageData = originalCtx.getImageData(0, 0, width, height);
+
+        // Create a canvas for the text-masked original image
+        const maskedCanvas = document.createElement('canvas');
+        maskedCanvas.width = width;
+        maskedCanvas.height = height;
+        const maskedCtx = maskedCanvas.getContext('2d');
+        const maskedImageData = maskedCtx.createImageData(width, height);
+
+        // Apply text as a mask to the original image
+        for (let i = 0; i < width * height; i++) {
+            const pixelIndex = i * 4;
+
+            // If text exists at this pixel, show the original image
+            if (textImageData.data[pixelIndex + 3] > 20) { // Lower threshold for better text visibility
+                maskedImageData.data[pixelIndex] = originalImageData.data[pixelIndex];
+                maskedImageData.data[pixelIndex + 1] = originalImageData.data[pixelIndex + 1];
+                maskedImageData.data[pixelIndex + 2] = originalImageData.data[pixelIndex + 2];
+                maskedImageData.data[pixelIndex + 3] = 255; // Fully opaque
+            } else {
+                // Otherwise transparent
+                maskedImageData.data[pixelIndex + 3] = 0;
+            }
+        }
+
+        maskedCtx.putImageData(maskedImageData, 0, 0);
+
+        // Draw the text-masked original image
+        ctx.drawImage(maskedCanvas, 0, 0);
+
+        // ===== LAYER 4: Subject Layer (Top Layer) =====
+        // Get the mask data
+        const maskData = segmentationMask.data;
+
         // Create a canvas for the subject
         const subjectCanvas = document.createElement('canvas');
         subjectCanvas.width = width;
         subjectCanvas.height = height;
         const subjectCtx = subjectCanvas.getContext('2d');
-
-        // Get the mask data
-        const maskData = segmentationMask.data;
-
-        // Get image data from original image
-        const originalImageData = originalCtx.getImageData(0, 0, width, height);
 
         // Create image data for the subject with transparent background
         const subjectImageData = subjectCtx.createImageData(width, height);
@@ -609,9 +640,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 subjectImageData.data[pixelIndex + 3] = 255; // Fully opaque
             } else {
                 // This is background - make transparent
-                subjectImageData.data[pixelIndex] = 0;
-                subjectImageData.data[pixelIndex + 1] = 0;
-                subjectImageData.data[pixelIndex + 2] = 0;
                 subjectImageData.data[pixelIndex + 3] = 0; // Fully transparent
             }
         }
@@ -619,30 +647,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Put the subject image data on the subject canvas
         subjectCtx.putImageData(subjectImageData, 0, 0);
 
-        // ===== COMBINE LAYERS =====
-        // 1. Start with a white background
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, width, height);
-
-        // 2. Draw the original image where text exists
-        const textImageData = textCtx.getImageData(0, 0, width, height);
-        const finalImageData = ctx.getImageData(0, 0, width, height);
-
-        for (let i = 0; i < maskData.length; i++) {
-            const pixelIndex = i * 4;
-
-            if (!maskData[i] && textImageData.data[pixelIndex + 3] > 0) {
-                // This is background with text - show original image
-                finalImageData.data[pixelIndex] = originalImageData.data[pixelIndex];
-                finalImageData.data[pixelIndex + 1] = originalImageData.data[pixelIndex + 1];
-                finalImageData.data[pixelIndex + 2] = originalImageData.data[pixelIndex + 2];
-                finalImageData.data[pixelIndex + 3] = 255;
-            }
-        }
-
-        ctx.putImageData(finalImageData, 0, 0);
-
-        // 3. Draw the subject on top
+        // Draw the subject on top
         ctx.drawImage(subjectCanvas, 0, 0);
 
         // Apply depth effect if needed
