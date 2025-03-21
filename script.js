@@ -217,23 +217,29 @@ document.addEventListener('DOMContentLoaded', function() {
         textPatternCtx.textAlign = 'center';
         textPatternCtx.textBaseline = 'middle';
 
-        // Calculate text position and create text pattern
-        const lines = text.split('\n');
-        const lineHeight = fontSizeVal * 1.2;
-        const totalTextHeight = lineHeight * lines.length;
-        let startY = (height - totalTextHeight) / 2 + lineHeight / 2;
+        // Use only a single line of text (ignore line breaks)
+        const singleLineText = text.replace(/\n/g, ' ');
 
-        // Fill the entire canvas with repeating text
-        const horizontalRepeats = Math.ceil(width / (fontSizeVal * 5)) + 1;
-        const verticalRepeats = Math.ceil(height / textSpacing) + 1;
+        // Calculate text metrics for spacing
+        const textMetrics = textPatternCtx.measureText(singleLineText);
+        const textWidth = textMetrics.width;
 
-        for (let v = 0; v < verticalRepeats; v++) {
-            for (let h = 0; h < horizontalRepeats; h++) {
-                lines.forEach((line, index) => {
-                    const x = (h * fontSizeVal * 5) % (width + fontSizeVal * 5) - fontSizeVal;
-                    const y = (v * totalTextHeight + index * lineHeight) % (height + totalTextHeight) - fontSizeVal;
-                    textPatternCtx.fillText(line, x, y);
-                });
+        // Calculate rows and columns for text pattern
+        const horizontalSpacing = textWidth + fontSizeVal;
+        const verticalSpacing = fontSizeVal * 1.5 * (10 / density);
+
+        const cols = Math.ceil(width / horizontalSpacing) + 1;
+        const rows = Math.ceil(height / verticalSpacing) + 1;
+
+        // Fill the canvas with a grid of text
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                // Offset every other row for a more natural pattern
+                const xOffset = (row % 2) * (horizontalSpacing / 2);
+                const x = col * horizontalSpacing + xOffset;
+                const y = row * verticalSpacing;
+
+                textPatternCtx.fillText(singleLineText, x, y);
             }
         }
 
