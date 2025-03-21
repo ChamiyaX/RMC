@@ -207,12 +207,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Clear canvas
         ctx.clearRect(0, 0, width, height);
 
-        const text = textInput.value;
-        if (!text) {
-            // If no text, just show original image
-            ctx.drawImage(originalImage, 0, 0, width, height);
-            return;
-        }
+        const text = textInput.value || "fff"; // Default text if none provided
 
         // Text settings
         const fontSizeVal = parseInt(fontSize.value);
@@ -250,19 +245,21 @@ document.addEventListener('DOMContentLoaded', function() {
         const textWidth = textMetrics.width;
 
         // Calculate rows and columns for text pattern
-        const horizontalSpacing = textWidth + fontSizeVal * 0.5;
-        const verticalSpacing = fontSizeVal * (1.2 * (10 / density));
+        // Adjust spacing based on density
+        const densityFactor = 11 - density; // Invert density (1 = dense, 10 = sparse)
+        const horizontalSpacing = textWidth * (1 + (densityFactor * 0.1));
+        const verticalSpacing = fontSizeVal * (1 + (densityFactor * 0.1));
 
         const cols = Math.ceil(width / horizontalSpacing) + 2;
         const rows = Math.ceil(height / verticalSpacing) + 2;
 
         // Fill the canvas with a grid of text
-        for (let row = 0; row < rows; row++) {
-            for (let col = 0; col < cols; col++) {
+        for (let row = -1; row < rows; row++) {
+            for (let col = -1; col < cols; col++) {
                 // Offset every other row for a more natural pattern
                 const xOffset = (row % 2) * (horizontalSpacing / 2);
-                const x = col * horizontalSpacing + xOffset - horizontalSpacing / 2;
-                const y = row * verticalSpacing - verticalSpacing / 2;
+                const x = col * horizontalSpacing + xOffset;
+                const y = row * verticalSpacing;
 
                 textPatternCtx.fillText(singleLineText, x, y);
             }
@@ -274,64 +271,80 @@ document.addEventListener('DOMContentLoaded', function() {
         const maskData = segmentationMask.data;
         const resultImageData = ctx.createImageData(width, height);
 
-        // Combine background text with foreground subject
+        // Create a new canvas for the final result with white background
+        const finalCanvas = document.createElement('canvas');
+        finalCanvas.width = width;
+        finalCanvas.height = height;
+        const finalCtx = finalCanvas.getContext('2d');
+
+        // Fill with white background
+        finalCtx.fillStyle = '#ffffff';
+        finalCtx.fillRect(0, 0, width, height);
+
+        // Process the image pixel by pixel
         for (let i = 0; i < maskData.length; i++) {
             const pixelIndex = i * 4;
+
+            // Default to white background
+            resultImageData.data[pixelIndex] = 255;
+            resultImageData.data[pixelIndex + 1] = 255;
+            resultImageData.data[pixelIndex + 2] = 255;
+            resultImageData.data[pixelIndex + 3] = 255; // Fully opaque
 
             if (maskData[i]) {
                 // This is the subject (person) - keep it from original image
                 resultImageData.data[pixelIndex] = originalImageData.data[pixelIndex];
                 resultImageData.data[pixelIndex + 1] = originalImageData.data[pixelIndex + 1];
                 resultImageData.data[pixelIndex + 2] = originalImageData.data[pixelIndex + 2];
-                resultImageData.data[pixelIndex + 3] = 255; // Full opacity
             } else {
-                // This is background - use text pattern where text exists
-                if (textImageData.data[pixelIndex + 3] > 0) {
-                    // Where text exists, show original background behind text
+                // This is background - check if there's text at this pixel
+                if (textImageData.data[pixelIndex + 3] > 50) { // Text exists with some opacity
+                    // Show original background where text is
                     resultImageData.data[pixelIndex] = originalImageData.data[pixelIndex];
                     resultImageData.data[pixelIndex + 1] = originalImageData.data[pixelIndex + 1];
                     resultImageData.data[pixelIndex + 2] = originalImageData.data[pixelIndex + 2];
-                    resultImageData.data[pixelIndex + 3] = 255;
-                } else {
-                    // Where no text, make transparent or use a fill color
-                    resultImageData.data[pixelIndex] = 255;
-                    resultImageData.data[pixelIndex + 1] = 255;
-                    resultImageData.data[pixelIndex + 2] = 255;
-                    resultImageData.data[pixelIndex + 3] = 0; // Transparent
                 }
             }
+        }
 
-            // Apply depth effect around subject edges
-            if (maskData[i]) {
-                // Check surrounding pixels for background
-                const x = i % width;
-                const y = Math.floor(i / width);
+        // Apply depth effect (edge enhancement)
+        if (depthEffect > 0) {
+            const edgeSize = depthEffect;
 
-                // Apply shadow/glow effect at the edges
-                const edgeSize = depthEffect;
-                let isEdge = false;
+            for (let i = 0; i < maskData.length; i++) {
+                const pixelIndex = i * 4;
 
-                // Check if this is an edge pixel
-                for (let dx = -edgeSize; dx <= edgeSize && !isEdge; dx++) {
-                    for (let dy = -edgeSize; dy <= edgeSize && !isEdge; dy++) {
-                        if (dx === 0 && dy === 0) continue;
+                if (maskData[i]) { // Only process subject pixels
+                    const x = i % width;
+                    const y = Math.floor(i / width);
 
-                        const nx = x + dx;
-                        const ny = y + dy;
+                    // Check surrounding pixels for text in background
+                    let isEdge = false;
 
-                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                            const neighborIndex = ny * width + nx;
-                            if (!maskData[neighborIndex] && textImageData.data[neighborIndex * 4 + 3] > 0) {
-                                isEdge = true;
+                    for (let dx = -edgeSize; dx <= edgeSize && !isEdge; dx++) {
+                        for (let dy = -edgeSize; dy <= edgeSize && !isEdge; dy++) {
+                            if (dx === 0 && dy === 0) continue;
 
-                                // Enhance edge with glow effect
-                                const distance = Math.sqrt(dx * dx + dy * dy);
-                                const intensity = 1 - (distance / edgeSize);
+                            const nx = x + dx;
+                            const ny = y + dy;
 
-                                if (intensity > 0) {
-                                    resultImageData.data[pixelIndex] = Math.min(255, resultImageData.data[pixelIndex] + 50 * intensity);
-                                    resultImageData.data[pixelIndex + 1] = Math.min(255, resultImageData.data[pixelIndex + 1] + 50 * intensity);
-                                    resultImageData.data[pixelIndex + 2] = Math.min(255, resultImageData.data[pixelIndex + 2] + 50 * intensity);
+                            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                                const neighborIndex = ny * width + nx;
+
+                                // If neighbor is background with text
+                                if (!maskData[neighborIndex] && textImageData.data[neighborIndex * 4 + 3] > 50) {
+                                    isEdge = true;
+
+                                    // Calculate intensity based on distance
+                                    const distance = Math.sqrt(dx * dx + dy * dy);
+                                    const intensity = 1 - (distance / edgeSize);
+
+                                    if (intensity > 0) {
+                                        // Enhance edge with subtle highlight
+                                        resultImageData.data[pixelIndex] = Math.min(255, resultImageData.data[pixelIndex] + 40 * intensity);
+                                        resultImageData.data[pixelIndex + 1] = Math.min(255, resultImageData.data[pixelIndex + 1] + 40 * intensity);
+                                        resultImageData.data[pixelIndex + 2] = Math.min(255, resultImageData.data[pixelIndex + 2] + 40 * intensity);
+                                    }
                                 }
                             }
                         }
