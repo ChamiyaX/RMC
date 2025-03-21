@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TextBIMG - Add Text Behind Image Subjects</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/@tensorflow/tfjs"></script>
+    <script src="https://unpkg.com/@tensorflow-models/body-pix@2.0"></script>
+</head>
+
+<body>
+    <header>
+        <h1>TextBIMG</h1>
+        <p>Add text behind your image subjects - like iPhone's depth effect</p>
+    </header>
+
+    <main>
+        <div class="upload-container">
+            <div class="upload-area" id="uploadArea">
+                <img id="uploadIcon" src="https://cdn-icons-png.flaticon.com/512/61/61112.png" alt="Upload Icon">
+                <p>Drag & drop your image here or click to browse</p>
+                <input type="file" id="imageUpload" accept="image/*" hidden>
+            </div>
+        </div>
+
+        <div class="editor-container" id="editorContainer" style="display: none;">
+            <div class="image-preview-container">
+                <div class="image-preview">
+                    <canvas id="previewCanvas"></canvas>
+                </div>
+            </div>
+
+            <div class="text-controls">
+                <div class="text-input-group">
+                    <label for="textInput">Your Text:</label>
+                    <textarea id="textInput" placeholder="Enter your text here..."></textarea>
+                </div>
+
+                <div class="text-options">
+                    <div class="option-group">
+                        <label for="fontSize">Font Size:</label>
+                        <input type="range" id="fontSize" min="10" max="100" value="40">
+                        <span id="fontSizeValue">40px</span>
+                    </div>
+
+                    <div class="option-group">
+                        <label for="fontColor">Font Color:</label>
+                        <input type="color" id="fontColor" value="#ffffff">
+                    </div>
+
+                    <div class="option-group">
+                        <label for="fontFamily">Font:</label>
+                        <select id="fontFamily">
+                            <option value="Arial">Arial</option>
+                            <option value="Verdana">Verdana</option>
+                            <option value="Helvetica">Helvetica</option>
+                            <option value="Times New Roman">Times New Roman</option>
+                            <option value="Courier New">Courier New</option>
+                            <option value="Impact">Impact</option>
+                        </select>
+                    </div>
+
+                    <div class="option-group">
+                        <label for="textDepth">Depth Effect:</label>
+                        <input type="range" id="textDepth" min="1" max="10" value="5">
+                        <span id="textDepthValue">5</span>
+                    </div>
+                </div>
+
+                <div class="action-buttons">
+                    <button id="resetBtn">Reset</button>
+                    <button id="downloadBtn">Download Image</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="loading-container" id="loadingContainer" style="display: none;">
+            <div class="spinner"></div>
+            <p>Processing your image...</p>
+        </div>
+    </main>
+
+    <footer>
+        <p>&copy; 2023 TextBIMG. All rights reserved.</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
